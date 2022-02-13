@@ -1,0 +1,5 @@
+python-socketio
+python-socketio[async]
+aiohttp
+requests
+websocket-client
