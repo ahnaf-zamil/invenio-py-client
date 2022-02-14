@@ -17,16 +17,17 @@ invenio_manager = InvenioManager(
     host=host,
     port=port,
     service_name="FLASK_SERVICE",
+    fetch_registry=True,
 )
 
 
 @app.route("/get_service")
 def get_flask_app_uri():
     """Gets an instance's URL"""
-    flask_service = invenio_manager.client.get_instance("flask_service")
+    flask_service = invenio_manager.client.get_instance_url("flask_service")
     return {"url": flask_service}
 
 
 if __name__ == "__main__":
     invenio_manager.run()
-    app.run(host=host, port=port)
+    app.run(host=host, port=port, debug=False)

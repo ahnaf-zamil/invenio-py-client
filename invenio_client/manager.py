@@ -25,7 +25,9 @@ class InvenioManager:
         host: str,
         port: int,
         service_name: str,
+        *,
         is_async: bool = False,
+        fetch_registry: bool = False
     ):
         """Main class for all Invenio functionality"""
         self._server_host = invenio_host
@@ -35,6 +37,7 @@ class InvenioManager:
         self._service_name = service_name
         self._client = None
         self.is_async = is_async
+        self.fetch_registry = fetch_registry
 
     def _set_client(self):
         if self.is_async:

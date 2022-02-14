@@ -19,19 +19,22 @@ invenio_manager = InvenioManager(
     host=host,
     port=port,
     service_name="FASTAPI_SERVICE",
-    is_async=True
+    is_async=True,
+    fetch_registry=True,
 )
+
 
 @app.on_event("startup")
 async def on_startup():
     invenio_manager.run()
 
+
 @app.get("/get_service")
 async def get_fastapi_app_uri():
     """Gets an instance's URL"""
-    fastapi_service = await invenio_manager.client.get_instance("fastapi_service")
+    fastapi_service = await invenio_manager.client.get_instance_url("fastapi_service")
     return {"url": fastapi_service}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host=host, port=port)
-

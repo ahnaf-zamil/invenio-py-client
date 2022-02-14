@@ -1,5 +1,5 @@
-python-socketio
-python-socketio[async]
+python-socketio[client]
+python-socketio[asyncio_client]
 aiohttp
 requests
 websocket-client

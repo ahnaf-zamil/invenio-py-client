@@ -14,19 +14,35 @@
 # OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 from typing import Optional
+from invenio_client.cache import RegistryCache
 from .sync import Client
 
 import socketio
 import asyncio
 import aiohttp
+import zlib
+import json
 
 
 class AsyncClient(Client):
     def __init__(self, invenio_manager):
         self.invenio_manager = invenio_manager
         self.sio = socketio.AsyncClient(reconnection=True)
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_event_loop()
         self._session: Optional[aiohttp.ClientSession] = None
+        self._cache: Optional[RegistryCache] = None
+        self.host, self.port = (
+            self.invenio_manager._server_host,
+            self.invenio_manager._server_port,
+        )
+
+        if self.invenio_manager.fetch_registry:
+            self._cache = RegistryCache()
+            self.loop.create_task(self._fetch_registry())
+
+    async def _check_session(self):
+        if not self._session:
+            self._session = aiohttp.ClientSession(raise_for_status=True)
 
     async def _run_forever(self):
         await self.sio.connect(
@@ -42,20 +58,53 @@ class AsyncClient(Client):
 
     def _start(self):
         self._register_callbacks()
-        self.loop = asyncio.get_event_loop()
         self.loop.create_task(self._run_forever())
 
-    async def get_instance(self, service_name: str) -> str:
+    async def _fetch_registry(self):
+        await self._check_session()
+
+        # Sleeping for a few seconds so that application can start
+        await asyncio.sleep(5)
+
+        while True:
+            resp = await self._session.get(
+                f"http://{self.host}:{self.port}/registry/fetch"
+            )
+            reader = resp.content
+
+            # Reading from StreamResponse
+            data = bytearray()
+            while True:
+                chunk = await reader.read(8)
+                if not chunk:
+                    break
+                data += chunk
+            decompressed_str = zlib.decompress(data).decode()
+            self._cache.set(json.loads(decompressed_str)["services"])
+
+            await asyncio.sleep(30)
+
+    async def get_instance_url(self, service_name: str) -> str:
         """Returns the URL of a load balanced service instance (this method is async)
 
         Format: `host:port` (e.g `192.11.0.34:5000`)
         """
-        if not self._session:
-            self._session = aiohttp.ClientSession(raise_for_status=True)
+        await self._check_session()
 
-        host, port = self.invenio_manager._server_host, self.invenio_manager._server_port
+        cached_service = self._cache.get(service_name)
 
+        if cached_service:
+            # If cache exists, load balancing and returning
+            if cached_service._last_instance_index == len(cached_service.instances):
+                cached_service._last_instance_index = 0
+
+            instance = cached_service.instances[cached_service._last_instance_index]
+            cached_service._last_instance_index += 1
+
+            return f"{instance.host}:{instance.port}"
+
+        # If cache does not exist, fetching
         resp = await self._session.get(
-            f"http://{host}:{port}/service/{service_name}/instance"
+            f"http://{self.host}:{self.port}/service/{service_name}/instance"
         )
         return await resp.text()

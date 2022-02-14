@@ -13,15 +13,33 @@
 # WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
 # OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+from typing import Optional
+from invenio_client.cache import RegistryCache
+
 import socketio
 import threading
 import requests
+import time
+import json
+import zlib
 
 
 class Client:
     def __init__(self, invenio_manager):
         self.invenio_manager = invenio_manager
         self.sio = socketio.Client(reconnection=True)
+        self._cache: Optional[RegistryCache] = None
+        self.host, self.port = (
+            self.invenio_manager._server_host,
+            self.invenio_manager._server_port,
+        )
+
+        if self.invenio_manager.fetch_registry:
+            self._cache = RegistryCache()
+            registry_fetch_thread = threading.Thread(
+                target=self._fetch_registry, name="Registry fetcher", daemon=True
+            )
+            registry_fetch_thread.start()
 
     def _register_callbacks(self):
         @self.sio.on("connect")
@@ -41,7 +59,7 @@ class Client:
                 "host": self.invenio_manager._host,
                 "port": self.invenio_manager._port,
                 "service_name": self.invenio_manager._service_name,
-            }
+            },
         )
         self.sio.wait()
 
@@ -52,14 +70,37 @@ class Client:
         )
         client_thread.start()
 
-    def get_instance(self, service_name: str):
+    def _fetch_registry(self):
+        # Sleeping for a few seconds so that application can start
+        time.sleep(5)
+
+        while True:
+            resp = requests.get(f"http://{self.host}:{self.port}/registry/fetch")
+            decompressed_str = zlib.decompress(resp.content).decode()
+            self._cache.set(json.loads(decompressed_str)["services"])
+
+            time.sleep(30)
+
+    def get_instance_url(self, service_name: str):
         """Returns the URL of a load balanced service instance
 
         Format: `host:port` (e.g `192.11.0.34:5000`)
         """
-        host, port = self.invenio_manager._server_host, self.invenio_manager._server_port
+        cached_service = self._cache.get(service_name)
+
+        if cached_service:
+            # If cache exists, load balancing and returning
+            if cached_service._last_instance_index == len(cached_service.instances):
+                cached_service._last_instance_index = 0
+
+            instance = cached_service.instances[cached_service._last_instance_index]
+            cached_service._last_instance_index += 1
+
+            return f"{instance.host}:{instance.port}"
+
+        # If cache does not exist, fetching
         resp = requests.get(
-            f"http://{host}:{port}/service/{service_name}/instance"
+            f"http://{self.host}:{self.port}/service/{service_name}/instance"
         )
         resp.raise_for_status()
         return resp.text
